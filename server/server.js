@@ -6,47 +6,38 @@ const FDT = 1 / 60;
 const SYNC_INTERVAL = 3; // broadcast every 3 ticks = 20Hz
 const MAX_PLAYERS = 8;
 
-// ===== Plane Physics (ported from Unity PlanePhysics.cs) =====
-// Unity uses meters; canvas uses pixels. Scale linear values by PX_SCALE.
-const PX_SCALE = 50;
-const GRAVITY = 9.81 * PX_SCALE;
-const FLY_POWER = 12 * PX_SCALE;
-const FORWARD_ACCEL = 1.5 * PX_SCALE;
-const PITCH_UP_TORQUE = 2.5;       // rad/s² when throttle on (angular, no scale)
-const PITCH_DOWN_TORQUE_MAX = 2;    // rad/s² max nose-down torque
-const DOWN_TORQUE_EXPONENT = 2;
-const MIN_PITCH_SPEED = 3 * PX_SCALE;
-const MAX_ANGULAR_SPEED = 2.094;    // ~120 deg/s in rad/s
-const MAX_SPEED = 12 * PX_SCALE;
-const LINEAR_DRAG = 0.35;
-const ANGULAR_DRAG = 2;
-const AERO_LIFT_COEFF = 0.15 / PX_SCALE; // v² term, divide by scale
+// ===== Plane Physics (simple arcade flight model) =====
+const GRAVITY        = 600;    // px/s²
+const THRUST         = 300;    // px/s² forward along plane direction
+const LIFT           = 700;    // px/s² in plane's up direction (overcomes gravity)
+const PITCH_UP_RATE  = 2.8;    // rad/s constant nose-up rotation while throttling
+const NOSE_FALL_RATE = 1.5;    // rad/s max nose-fall rate without throttle
+const MAX_SPEED      = 500;    // px/s
+const DRAG           = 0.5;    // linear drag coefficient
+const BULLET_SPEED   = 600;    // px/s
+const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
 
 // ===== World =====
 const W = 1920, H = 1080;
 
 // ===== Helpers =====
-function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 function deltaAngle(a, b) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
 }
-function inverseLerp(a, b, v) {
-  if (Math.abs(b - a) < 1e-9) return 0;
-  return clamp01((v - a) / (b - a));
-}
+const GROUND_Y = H - 40;
+const CEILING = 20;
 
 // ===== Player =====
 class Player {
   constructor(idx) {
     this.idx = idx;
     this.x = 200 + Math.random() * 200;
-    this.y = H / 2 + (Math.random() - 0.5) * 200;
-    this.vx = 2 * PX_SCALE; this.vy = 0;
+    this.y = GROUND_Y;
+    this.vx = 0; this.vy = 0;
     this.angle = 0;     // radians, 0 = right
-    this.angVel = 0;    // angular velocity in rad/s
     this.flipped = false;
     this.throttle = false;
     this.alive = true;
@@ -54,10 +45,9 @@ class Player {
   }
   reset() {
     this.x = 200 + Math.random() * 200;
-    this.y = H / 2 + (Math.random() - 0.5) * 200;
-    this.vx = 2 * PX_SCALE; this.vy = 0;
+    this.y = GROUND_Y;
+    this.vx = 0; this.vy = 0;
     this.angle = 0;
-    this.angVel = 0;
     this.flipped = false;
     this.throttle = false;
     this.alive = true;
@@ -66,78 +56,52 @@ class Player {
     if (!this.occupied || !this.alive) return;
 
     const vertSign = this.flipped ? -1 : 1;
+    const onGround = this.y >= GROUND_Y;
 
-    // Plane's local axes in canvas y-down coordinates:
-    //   forward  = (cos(angle), sin(angle))
-    //   upDir    = plane's up * vertSign = (sin(angle)*vertSign, -cos(angle)*vertSign)
-    const fwdX = Math.cos(this.angle);
-    const fwdY = Math.sin(this.angle);
-    const upX = Math.sin(this.angle) * vertSign;
-    const upY = -Math.cos(this.angle) * vertSign;
-
-    // Forward speed (component of velocity along forward direction)
-    const forwardSpeed = this.vx * fwdX + this.vy * fwdY;
-
-    // worldUp in y-down canvas = (0, -1) (screen up)
-    const worldUpX = 0, worldUpY = -1;
-
+    // --- Angle (direct control, no angular velocity) ---
     if (this.throttle) {
-      // --- Lift force: upDir * flyPower * directionalLift ---
-      const directionalLift = clamp01(upX * worldUpX + upY * worldUpY);
-      this.vx += upX * FLY_POWER * directionalLift * dt;
-      this.vy += upY * FLY_POWER * directionalLift * dt;
-
-      // --- Forward thrust ---
-      this.vx += fwdX * FORWARD_ACCEL * dt;
-      this.vy += fwdY * FORWARD_ACCEL * dt;
-
-      // --- Pitch-up torque (decrease angle = pitch up in y-down) ---
-      if (forwardSpeed >= MIN_PITCH_SPEED && Math.abs(this.angVel) < MAX_ANGULAR_SPEED) {
-        // Pitch-up in y-down means angle decreasing, so torque is negative * vertSign
-        this.angVel += -PITCH_UP_TORQUE * vertSign * dt;
+      // Pitch up: decrease angle (nose up in y-down canvas)
+      this.angle -= PITCH_UP_RATE * vertSign * dt;
+    } else if (!onGround) {
+      // Nose falls toward pointing down (PI/2 in y-down canvas)
+      const target = Math.PI / 2; // straight down
+      const diff = deltaAngle(this.angle, target);
+      const step = NOSE_FALL_RATE * dt;
+      if (Math.abs(diff) <= step) {
+        this.angle = target;
+      } else {
+        this.angle += Math.sign(diff) * step;
       }
     }
-
-    // --- Aerodynamic lift (always active) ---
-    // liftDir = plane's up * vertSign (same as upDir)
-    const aeroLiftDot = clamp01(upX * worldUpX + upY * worldUpY);
-    const aeroForce = AERO_LIFT_COEFF * forwardSpeed * forwardSpeed * aeroLiftDot;
-    this.vx += upX * aeroForce * dt;
-    this.vy += upY * aeroForce * dt;
-
-    // --- Pitch-down torque when throttle OFF ---
-    if (!this.throttle) {
-      // Reference angle: straight up or straight down depending on flipped
-      // In y-down: "up" for non-flipped is -PI/2, "down" for flipped is +PI/2
-      const reference = this.flipped ? Math.PI / 2 : -Math.PI / 2;
-      const angleFromUp = deltaAngle(reference, this.angle);
-      const factor = Math.pow(inverseLerp(0, Math.PI / 2, Math.abs(angleFromUp)), DOWN_TORQUE_EXPONENT);
-      // Torque pushes nose downward: toward positive angle if angleFromUp > 0, negative if < 0
-      const torqueDir = angleFromUp > 0 ? 1 : -1;
-      this.angVel += torqueDir * vertSign * PITCH_DOWN_TORQUE_MAX * factor * dt;
-    }
-
-    // --- Gravity (downward = +y in canvas) ---
-    this.vy += GRAVITY * dt;
-
-    // --- Angular drag ---
-    this.angVel *= 1 / (1 + ANGULAR_DRAG * dt);
-
-    // --- Clamp angular velocity ---
-    if (this.angVel > MAX_ANGULAR_SPEED) this.angVel = MAX_ANGULAR_SPEED;
-    if (this.angVel < -MAX_ANGULAR_SPEED) this.angVel = -MAX_ANGULAR_SPEED;
-
-    // --- Apply angular velocity ---
-    this.angle += this.angVel * dt;
     // Normalize angle to [-PI, PI]
     while (this.angle > Math.PI) this.angle -= Math.PI * 2;
     while (this.angle < -Math.PI) this.angle += Math.PI * 2;
 
-    // --- Linear drag ---
-    this.vx *= 1 / (1 + LINEAR_DRAG * dt);
-    this.vy *= 1 / (1 + LINEAR_DRAG * dt);
+    // --- Forces ---
+    if (this.throttle) {
+      // Thrust along plane forward
+      this.vx += Math.cos(this.angle) * THRUST * dt;
+      this.vy += Math.sin(this.angle) * THRUST * dt;
 
-    // --- Speed cap ---
+      // Lift in plane's up direction (only when upright)
+      const upX = Math.sin(this.angle) * vertSign;
+      const upY = -Math.cos(this.angle) * vertSign;
+      const liftScale = Math.max(0, -upY); // 1 when level, 0 when inverted
+      this.vx += upX * LIFT * liftScale * dt;
+      this.vy += upY * LIFT * liftScale * dt;
+    }
+
+    // Gravity (only when airborne)
+    if (!onGround) {
+      this.vy += GRAVITY * dt;
+    }
+
+    // Linear drag
+    const dragFactor = 1 / (1 + DRAG * dt);
+    this.vx *= dragFactor;
+    this.vy *= dragFactor;
+
+    // Speed cap
     const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
     if (spd > MAX_SPEED) {
       this.vx *= MAX_SPEED / spd;
@@ -148,13 +112,20 @@ class Player {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
-    // --- Ground / ceiling ---
-    if (this.y > H - 40) {
-      this.y = H - 40;
-      this.alive = false; // crash
+    // --- Ground ---
+    if (this.y >= GROUND_Y) {
+      this.y = GROUND_Y;
+      if (this.vy > CRASH_SPEED) {
+        this.alive = false; // crash
+      } else {
+        this.vy = 0;
+        this.vx *= 0.95; // ground friction
+      }
     }
-    if (this.y < 20) {
-      this.y = 20;
+
+    // --- Ceiling ---
+    if (this.y < CEILING) {
+      this.y = CEILING;
       if (this.vy < 0) this.vy = 0;
     }
   }
@@ -167,8 +138,8 @@ class Player {
 class Bullet {
   constructor(x, y, angle, ownerIdx) {
     this.x = x; this.y = y;
-    this.vx = Math.cos(angle) * 12 * PX_SCALE;
-    this.vy = Math.sin(angle) * 12 * PX_SCALE;
+    this.vx = Math.cos(angle) * BULLET_SPEED;
+    this.vy = Math.sin(angle) * BULLET_SPEED;
     this.owner = ownerIdx;
     this.life = 120; // frames
   }
@@ -228,7 +199,7 @@ export default class Server {
   packState() {
     const ps = this.players.map(p => ({
       i: p.idx, x: p.x, y: p.y, vx: p.vx, vy: p.vy,
-      a: p.angle, av: p.angVel, fl: p.flipped,
+      a: p.angle, fl: p.flipped,
       t: p.throttle, alive: p.alive, occ: p.occupied
     }));
     const bs = this.bullets.map(b => ({

@@ -22,38 +22,31 @@ const cvs = document.getElementById('c'), ctx = cvs.getContext('2d');
 const W = 1920, H = 1080;
 cvs.width = W; cvs.height = H;
 
-// ===== Physics (mirror server — ported from Unity PlanePhysics.cs) =====
-const PX_SCALE = 50; // pixels per Unity unit
-const GRAVITY = 9.81 * PX_SCALE;
-const FLY_POWER = 12 * PX_SCALE;
-const FORWARD_ACCEL = 1.5 * PX_SCALE;
-const PITCH_UP_TORQUE = 2.5;
-const PITCH_DOWN_TORQUE_MAX = 2;
-const DOWN_TORQUE_EXPONENT = 2;
-const MIN_PITCH_SPEED = 3 * PX_SCALE;
-const MAX_ANGULAR_SPEED = 2.094;  // ~120 deg/s in rad/s
-const MAX_SPEED = 12 * PX_SCALE;
-const LINEAR_DRAG = 0.35;
-const ANGULAR_DRAG = 2;
-const AERO_LIFT_COEFF = 0.15 / PX_SCALE;
+// ===== Physics (simple arcade flight model — mirrors server) =====
+const GRAVITY        = 600;    // px/s²
+const THRUST         = 300;    // px/s² forward along plane direction
+const LIFT           = 700;    // px/s² in plane's up direction
+const PITCH_UP_RATE  = 2.8;    // rad/s constant nose-up rotation while throttling
+const NOSE_FALL_RATE = 1.5;    // rad/s max nose-fall rate without throttle
+const MAX_SPEED      = 500;    // px/s
+const DRAG           = 0.5;    // linear drag coefficient
+const BULLET_SPEED   = 600;    // px/s
+const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
+const GROUND_Y = H - 40;
+const CEILING = 20;
 
-function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 function deltaAngle(a, b) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
 }
-function inverseLerp(a, b, v) {
-  if (Math.abs(b - a) < 1e-9) return 0;
-  return clamp01((v - a) / (b - a));
-}
 
 // ===== Game State =====
 let gameState = 'MENU'; // MENU, PLAYING
 let myIdx = -1;
 let ws = null;
-let players = []; // { idx, x, y, vx, vy, angle, angVel, flipped, throttle, alive, occupied }
+let players = []; // { idx, x, y, vx, vy, angle, flipped, throttle, alive, occupied }
 let bullets = []; // { x, y, vx, vy, owner }
 let myName = localStorage.getItem('webtry-name') || '';
 let myThrottle = false;
@@ -241,57 +234,44 @@ function fixedUpdate() {
 
   const me = players.find(p => p.idx === myIdx);
   if (me && me.alive && me.occupied) {
-    // Mirror server physics exactly (ported from Unity PlanePhysics.cs)
     const vertSign = me.flipped ? -1 : 1;
-    const fwdX = Math.cos(me.angle);
-    const fwdY = Math.sin(me.angle);
-    const upX = Math.sin(me.angle) * vertSign;
-    const upY = -Math.cos(me.angle) * vertSign;
-    const forwardSpeed = me.vx * fwdX + me.vy * fwdY;
-    const worldUpX = 0, worldUpY = -1;
+    const onGround = me.y >= GROUND_Y;
 
+    // --- Angle (direct control, no angular velocity) ---
     if (me.throttle) {
-      const directionalLift = clamp01(upX * worldUpX + upY * worldUpY);
-      me.vx += upX * FLY_POWER * directionalLift * FDT;
-      me.vy += upY * FLY_POWER * directionalLift * FDT;
-      me.vx += fwdX * FORWARD_ACCEL * FDT;
-      me.vy += fwdY * FORWARD_ACCEL * FDT;
-      if (forwardSpeed >= MIN_PITCH_SPEED && Math.abs(me.angVel) < MAX_ANGULAR_SPEED) {
-        me.angVel += -PITCH_UP_TORQUE * vertSign * FDT;
+      me.angle -= PITCH_UP_RATE * vertSign * FDT;
+    } else if (!onGround) {
+      const target = Math.PI / 2;
+      const diff = deltaAngle(me.angle, target);
+      const step = NOSE_FALL_RATE * FDT;
+      if (Math.abs(diff) <= step) {
+        me.angle = target;
+      } else {
+        me.angle += Math.sign(diff) * step;
       }
     }
-
-    // Aerodynamic lift (always)
-    const aeroLiftDot = clamp01(upX * worldUpX + upY * worldUpY);
-    const aeroForce = AERO_LIFT_COEFF * forwardSpeed * forwardSpeed * aeroLiftDot;
-    me.vx += upX * aeroForce * FDT;
-    me.vy += upY * aeroForce * FDT;
-
-    // Pitch-down torque when throttle OFF
-    if (!me.throttle) {
-      const reference = me.flipped ? Math.PI / 2 : -Math.PI / 2;
-      const angleFromUp = deltaAngle(reference, me.angle);
-      const factor = Math.pow(inverseLerp(0, Math.PI / 2, Math.abs(angleFromUp)), DOWN_TORQUE_EXPONENT);
-      const torqueDir = angleFromUp > 0 ? 1 : -1;
-      me.angVel += torqueDir * vertSign * PITCH_DOWN_TORQUE_MAX * factor * FDT;
-    }
-
-    // Gravity
-    me.vy += GRAVITY * FDT;
-
-    // Angular drag + clamp
-    me.angVel *= 1 / (1 + ANGULAR_DRAG * FDT);
-    if (me.angVel > MAX_ANGULAR_SPEED) me.angVel = MAX_ANGULAR_SPEED;
-    if (me.angVel < -MAX_ANGULAR_SPEED) me.angVel = -MAX_ANGULAR_SPEED;
-
-    // Apply angular velocity
-    me.angle += me.angVel * FDT;
     while (me.angle > Math.PI) me.angle -= Math.PI * 2;
     while (me.angle < -Math.PI) me.angle += Math.PI * 2;
 
-    // Linear drag + speed cap
-    me.vx *= 1 / (1 + LINEAR_DRAG * FDT);
-    me.vy *= 1 / (1 + LINEAR_DRAG * FDT);
+    // --- Forces ---
+    if (me.throttle) {
+      me.vx += Math.cos(me.angle) * THRUST * FDT;
+      me.vy += Math.sin(me.angle) * THRUST * FDT;
+      const upX = Math.sin(me.angle) * vertSign;
+      const upY = -Math.cos(me.angle) * vertSign;
+      const liftScale = Math.max(0, -upY);
+      me.vx += upX * LIFT * liftScale * FDT;
+      me.vy += upY * LIFT * liftScale * FDT;
+    }
+
+    if (!onGround) {
+      me.vy += GRAVITY * FDT;
+    }
+
+    const dragFactor = 1 / (1 + DRAG * FDT);
+    me.vx *= dragFactor;
+    me.vy *= dragFactor;
+
     const spd = Math.sqrt(me.vx * me.vx + me.vy * me.vy);
     if (spd > MAX_SPEED) { me.vx *= MAX_SPEED / spd; me.vy *= MAX_SPEED / spd; }
 
@@ -299,9 +279,19 @@ function fixedUpdate() {
     me.x += me.vx * FDT;
     me.y += me.vy * FDT;
 
-    // Ground / ceiling
-    if (me.y > H - 40) { me.y = H - 40; me.alive = false; }
-    if (me.y < 20) { me.y = 20; if (me.vy < 0) me.vy = 0; }
+    // Ground
+    if (me.y >= GROUND_Y) {
+      me.y = GROUND_Y;
+      if (me.vy > CRASH_SPEED) {
+        me.alive = false;
+      } else {
+        me.vy = 0;
+        me.vx *= 0.95;
+      }
+    }
+
+    // Ceiling
+    if (me.y < CEILING) { me.y = CEILING; if (me.vy < 0) me.vy = 0; }
   }
 
   // Predict bullets
@@ -325,7 +315,7 @@ function unpackState(data) {
     let p = players.find(pp => pp.idx === sp.i);
     if (!p) {
       p = { idx: sp.i, x: sp.x, y: sp.y, vx: sp.vx, vy: sp.vy,
-            angle: sp.a, angVel: sp.av || 0, flipped: !!sp.fl,
+            angle: sp.a, flipped: !!sp.fl,
             throttle: sp.t, alive: sp.alive, occupied: sp.occ, name: '' };
       players.push(p);
     }
@@ -336,14 +326,14 @@ function unpackState(data) {
       smoothOffsets[sp.i].x += p.x - sp.x;
       smoothOffsets[sp.i].y += p.y - sp.y;
       p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
-      p.angle = sp.a; p.angVel = sp.av || 0;
+      p.angle = sp.a;
       p.flipped = !!sp.fl;
       // Client authoritative for throttle; accept alive from server
       p.alive = sp.alive;
     } else {
       // Remote: snap
       p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
-      p.angle = sp.a; p.angVel = sp.av || 0; p.flipped = !!sp.fl;
+      p.angle = sp.a; p.flipped = !!sp.fl;
       p.throttle = sp.t; p.alive = sp.alive; p.occupied = sp.occ;
     }
   }
@@ -428,7 +418,7 @@ cvs.addEventListener('mousedown', e => {
     // Local prediction bullet
     const me = players.find(p => p.idx === myIdx);
     if (me && me.alive) {
-      bullets.push({ x: me.x, y: me.y, vx: Math.cos(me.angle) * 12 * PX_SCALE, vy: Math.sin(me.angle) * 12 * PX_SCALE, owner: myIdx });
+      bullets.push({ x: me.x, y: me.y, vx: Math.cos(me.angle) * BULLET_SPEED, vy: Math.sin(me.angle) * BULLET_SPEED, owner: myIdx });
     }
   }
 });
