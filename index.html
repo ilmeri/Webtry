@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webtry</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden}
+canvas{display:block;max-width:100vw;max-height:100vh;width:auto;height:auto;object-fit:contain;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+import PartySocket from 'https://esm.sh/partysocket';
+
+const PARTYKIT_HOST = location.hostname === 'localhost'
+  ? 'localhost:1999' : 'webtry.ilmeri.partykit.dev'; // update after first deploy
+
+const cvs = document.getElementById('c'), ctx = cvs.getContext('2d');
+const W = 1920, H = 1080;
+cvs.width = W; cvs.height = H;
+
+// ===== Physics (mirror server) =====
+let THROTTLE_ACCEL = 0.15;
+let THROTTLE_ROT = 2.5;
+let GRAVITY = 0.12;
+let MAX_SPEED = 8;
+let DRAG = 0.995;
+
+// ===== Game State =====
+let gameState = 'MENU'; // MENU, PLAYING
+let myIdx = -1;
+let ws = null;
+let players = []; // { idx, x, y, vx, vy, angle, throttle, alive, occupied }
+let bullets = []; // { x, y, vx, vy, owner }
+let myName = localStorage.getItem('webtry-name') || '';
+let myThrottle = false;
+
+// Prediction smoothing
+const smoothOffsets = {}; // idx -> { x, y }
+const SMOOTH_DECAY = 0.7;
+
+// ===== Canvas Coord =====
+function canvasPos(e) {
+  const r = cvs.getBoundingClientRect();
+  const t = e.touches ? e.touches[0] || e.changedTouches[0] : e;
+  return {
+    x: (t.clientX - r.left) / r.width * W,
+    y: (t.clientY - r.top) / r.height * H
+  };
+}
+
+// ===== Camera =====
+let camX = 0;
+
+function updateCamera() {
+  const me = players.find(p => p.idx === myIdx);
+  if (me) {
+    const targetX = me.x - W * 0.3;
+    camX += (targetX - camX) * 0.08;
+  }
+}
+
+// ===== Drawing =====
+function drawBackground() {
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#4a90d9');
+  grad.addColorStop(0.7, '#87ceeb');
+  grad.addColorStop(1, '#5a8f3c');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Ground
+  ctx.fillStyle = '#3d6b2e';
+  ctx.fillRect(0, H - 40, W, 40);
+}
+
+function drawPlane(p) {
+  const sx = p.x - camX;
+  const sy = p.y;
+  if (sx < -60 || sx > W + 60) return;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(p.angle);
+
+  // Fuselage
+  ctx.fillStyle = p.alive ? (p.idx === myIdx ? '#e8c840' : '#e04545') : '#666';
+  ctx.beginPath();
+  ctx.moveTo(20, 0);
+  ctx.lineTo(-12, -6);
+  ctx.lineTo(-12, 6);
+  ctx.closePath();
+  ctx.fill();
+
+  // Wing
+  ctx.fillStyle = p.alive ? (p.idx === myIdx ? '#d4a800' : '#c43030') : '#555';
+  ctx.fillRect(-6, -10, 10, 20);
+
+  // Tail
+  ctx.fillRect(-14, -5, 4, 10);
+
+  // Throttle flame
+  if (p.throttle && p.alive) {
+    ctx.fillStyle = '#ff6600';
+    ctx.beginPath();
+    ctx.moveTo(-12, -3);
+    ctx.lineTo(-20 - Math.random() * 6, 0);
+    ctx.lineTo(-12, 3);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // Name label
+  if (p.name) {
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(p.name, sx, sy - 22);
+  }
+}
+
+function drawBullets() {
+  ctx.fillStyle = '#ff0';
+  for (const b of bullets) {
+    const sx = b.x - camX;
+    if (sx < -10 || sx > W + 10) continue;
+    ctx.beginPath();
+    ctx.arc(sx, b.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawHUD() {
+  ctx.font = '14px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.textAlign = 'left';
+  ctx.fillText('LMB: throttle  |  MMB: flip  |  RMB: shoot  |  Space: respawn', 10, H - 10);
+}
+
+function drawMenu() {
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 64px sans-serif';
+  ctx.fillStyle = '#e8c840';
+  ctx.fillText('WEBTRY', W / 2, H / 2 - 80);
+  ctx.font = '24px sans-serif';
+  ctx.fillStyle = '#ccc';
+  ctx.fillText('Click to play', W / 2, H / 2 + 20);
+}
+
+// ===== Rendering =====
+function render() {
+  if (gameState === 'MENU') {
+    drawMenu();
+    return;
+  }
+
+  drawBackground();
+  updateCamera();
+  drawBullets();
+  for (const p of players) drawPlane(p);
+  drawHUD();
+}
+
+// ===== Client Prediction =====
+const FDT = 1 / 60;
+
+function fixedUpdate() {
+  if (gameState !== 'PLAYING') return;
+
+  const me = players.find(p => p.idx === myIdx);
+  if (me && me.alive && me.occupied) {
+    // Mirror server physics
+    if (me.throttle) {
+      me.angle -= THROTTLE_ROT * FDT;
+      me.vx += Math.cos(me.angle) * THROTTLE_ACCEL;
+      me.vy += Math.sin(me.angle) * THROTTLE_ACCEL;
+    }
+    me.vy += GRAVITY;
+    if (!me.throttle) {
+      const velAngle = Math.atan2(me.vy, me.vx);
+      let diff = velAngle - me.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      me.angle += diff * 0.08;
+    }
+    me.vx *= DRAG; me.vy *= DRAG;
+    const spd = Math.sqrt(me.vx * me.vx + me.vy * me.vy);
+    if (spd > MAX_SPEED) { me.vx *= MAX_SPEED / spd; me.vy *= MAX_SPEED / spd; }
+    me.x += me.vx; me.y += me.vy;
+    if (me.y > H - 40) { me.y = H - 40; me.alive = false; }
+    if (me.y < 20) { me.y = 20; if (me.vy < 0) me.vy = 0; }
+  }
+
+  // Predict bullets
+  for (const b of bullets) {
+    b.x += b.vx; b.y += b.vy;
+  }
+
+  // Decay smoothing offsets
+  for (const idx in smoothOffsets) {
+    smoothOffsets[idx].x *= SMOOTH_DECAY;
+    smoothOffsets[idx].y *= SMOOTH_DECAY;
+    if (Math.abs(smoothOffsets[idx].x) < 0.1) smoothOffsets[idx].x = 0;
+    if (Math.abs(smoothOffsets[idx].y) < 0.1) smoothOffsets[idx].y = 0;
+  }
+}
+
+// ===== State Unpack =====
+function unpackState(data) {
+  // Update/add players from server
+  for (const sp of data.players) {
+    let p = players.find(pp => pp.idx === sp.i);
+    if (!p) {
+      p = { idx: sp.i, x: sp.x, y: sp.y, vx: sp.vx, vy: sp.vy,
+            angle: sp.a, throttle: sp.t, alive: sp.alive, occupied: sp.occ, name: '' };
+      players.push(p);
+    }
+
+    if (sp.i === myIdx) {
+      // Own player: smoothing offset
+      if (!smoothOffsets[sp.i]) smoothOffsets[sp.i] = { x: 0, y: 0 };
+      smoothOffsets[sp.i].x += p.x - sp.x;
+      smoothOffsets[sp.i].y += p.y - sp.y;
+      p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
+      // Client authoritative for throttle; accept alive from server
+      p.alive = sp.alive;
+    } else {
+      // Remote: snap
+      p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
+      p.angle = sp.a; p.throttle = sp.t; p.alive = sp.alive; p.occupied = sp.occ;
+    }
+  }
+
+  // Remove players no longer in server state
+  const serverIdxs = new Set(data.players.map(p => p.i));
+  players = players.filter(p => serverIdxs.has(p.idx));
+
+  // Bullets: replace with server state
+  bullets = data.bullets.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, owner: b.o }));
+}
+
+// ===== Networking =====
+let pendingState = null;
+
+function joinGame() {
+  ws = new PartySocket({ host: PARTYKIT_HOST, room: 'arena' });
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    switch (msg.type) {
+      case 'assign':
+        myIdx = msg.idx;
+        gameState = 'PLAYING';
+        if (myName) ws.send(JSON.stringify({ type: 'name', name: myName }));
+        break;
+      case 'state':
+        pendingState = msg.data;
+        break;
+      case 'start':
+        gameState = 'PLAYING';
+        break;
+      case 'joined':
+      case 'left':
+      case 'players':
+        // Update names from player list
+        if (msg.players) {
+          for (const pl of msg.players) {
+            const p = players.find(pp => pp.idx === pl.idx);
+            if (p) p.name = pl.name;
+          }
+        }
+        break;
+      case 'full':
+        alert('Server full');
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    gameState = 'MENU';
+    myIdx = -1;
+    players = [];
+    bullets = [];
+  };
+}
+
+// ===== Input =====
+cvs.addEventListener('contextmenu', e => e.preventDefault());
+
+cvs.addEventListener('mousedown', e => {
+  if (gameState === 'MENU') { joinGame(); return; }
+  if (gameState !== 'PLAYING') return;
+
+  if (e.button === 0) {
+    // Left click: throttle on
+    myThrottle = true;
+    const me = players.find(p => p.idx === myIdx);
+    if (me) me.throttle = true;
+    if (ws) ws.send(JSON.stringify({ type: 'input', action: 'throttle', active: true }));
+  } else if (e.button === 1) {
+    // Middle click: flip
+    e.preventDefault();
+    const me = players.find(p => p.idx === myIdx);
+    if (me && me.alive) {
+      me.angle += Math.PI;
+      while (me.angle > Math.PI) me.angle -= Math.PI * 2;
+      while (me.angle < -Math.PI) me.angle += Math.PI * 2;
+    }
+    if (ws) ws.send(JSON.stringify({ type: 'input', action: 'flip' }));
+  } else if (e.button === 2) {
+    // Right click: shoot
+    if (ws) ws.send(JSON.stringify({ type: 'input', action: 'shoot' }));
+    // Local prediction bullet
+    const me = players.find(p => p.idx === myIdx);
+    if (me && me.alive) {
+      bullets.push({ x: me.x, y: me.y, vx: Math.cos(me.angle) * 12, vy: Math.sin(me.angle) * 12, owner: myIdx });
+    }
+  }
+});
+
+cvs.addEventListener('mouseup', e => {
+  if (e.button === 0 && gameState === 'PLAYING') {
+    myThrottle = false;
+    const me = players.find(p => p.idx === myIdx);
+    if (me) me.throttle = false;
+    if (ws) ws.send(JSON.stringify({ type: 'input', action: 'throttle', active: false }));
+  }
+});
+
+// Catch mouseup outside canvas
+document.addEventListener('mouseup', e => {
+  if (e.target === cvs) return;
+  if (e.button === 0 && gameState === 'PLAYING' && myThrottle) {
+    myThrottle = false;
+    const me = players.find(p => p.idx === myIdx);
+    if (me) me.throttle = false;
+    if (ws) ws.send(JSON.stringify({ type: 'input', action: 'throttle', active: false }));
+  }
+});
+
+// Respawn on Space
+window.addEventListener('keydown', e => {
+  if (e.key === ' ' || e.code === 'Space') {
+    e.preventDefault();
+    if (ws) ws.send(JSON.stringify({ type: 'respawn' }));
+  }
+});
+
+// Clear throttle on blur
+window.addEventListener('blur', () => {
+  if (myThrottle && ws) {
+    myThrottle = false;
+    const me = players.find(p => p.idx === myIdx);
+    if (me) me.throttle = false;
+    ws.send(JSON.stringify({ type: 'input', action: 'throttle', active: false }));
+  }
+});
+
+// ===== Game Loop =====
+let acc = 0, lt = 0;
+
+function loop(time) {
+  if (lt === 0) { lt = time; requestAnimationFrame(loop); return; }
+  let dt = (time - lt) / 1000; lt = time;
+  dt = Math.min(dt, 0.1);
+
+  // Apply server state
+  if (pendingState) {
+    try { unpackState(pendingState); } catch (e) { console.warn('unpack error:', e); }
+    pendingState = null;
+  }
+
+  acc += dt;
+  while (acc >= FDT) { fixedUpdate(); acc -= FDT; }
+
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ===== Responsive =====
+function resize() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  cvs.style.width = W * s + 'px';
+  cvs.style.height = H * s + 'px';
+}
+addEventListener('resize', resize);
+resize();
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

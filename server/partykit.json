@@ -1,0 +1,6 @@
+{
+  "name": "webtry",
+  "main": "server.js",
+  "port": 1999,
+  "compatibilityDate": "2026-03-02"
+}
