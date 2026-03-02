@@ -114,7 +114,7 @@ class Player {
       const factor = Math.pow(inverseLerp(0, Math.PI / 2, Math.abs(angleFromUp)), DOWN_TORQUE_EXPONENT);
       // Torque pushes nose downward: toward positive angle if angleFromUp > 0, negative if < 0
       const torqueDir = angleFromUp > 0 ? 1 : -1;
-      this.angVel += torqueDir * PITCH_DOWN_TORQUE_MAX * factor * dt;
+      this.angVel += torqueDir * vertSign * PITCH_DOWN_TORQUE_MAX * factor * dt;
     }
 
     // --- Gravity (downward = +y in canvas) ---
@@ -173,8 +173,8 @@ class Bullet {
     this.life = 120; // frames
   }
   update() {
-    this.x += this.vx;
-    this.y += this.vy;
+    this.x += this.vx * FDT;
+    this.y += this.vy * FDT;
     this.life--;
   }
 }

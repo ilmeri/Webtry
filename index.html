@@ -93,9 +93,50 @@ function drawBackground() {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 
+  // Clouds (parallax, slower than ground)
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  const cloudOff = camX * 0.3;
+  for (let i = -1; i < 8; i++) {
+    const cx = i * 350 - (cloudOff % 350);
+    ctx.beginPath();
+    ctx.ellipse(cx, 120, 80, 30, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + 200, 200, 60, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // Ground
   ctx.fillStyle = '#3d6b2e';
   ctx.fillRect(0, H - 40, W, 40);
+
+  // Ground stripes (scroll with camera for movement reference)
+  ctx.fillStyle = '#4a7a3a';
+  const stripeSpacing = 120;
+  const groundOff = camX % stripeSpacing;
+  for (let i = -1; i < W / stripeSpacing + 2; i++) {
+    const sx = i * stripeSpacing - groundOff;
+    ctx.fillRect(sx, H - 40, 4, 40);
+  }
+
+  // Trees (scroll with camera)
+  ctx.fillStyle = '#2d5a1e';
+  const treeSpacing = 200;
+  const treeOff = camX % treeSpacing;
+  for (let i = -1; i < W / treeSpacing + 2; i++) {
+    const tx = i * treeSpacing - treeOff + 50;
+    // Trunk
+    ctx.fillStyle = '#5a3a1a';
+    ctx.fillRect(tx - 3, H - 60, 6, 20);
+    // Canopy
+    ctx.fillStyle = '#2d5a1e';
+    ctx.beginPath();
+    ctx.moveTo(tx, H - 80);
+    ctx.lineTo(tx - 15, H - 55);
+    ctx.lineTo(tx + 15, H - 55);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 function drawPlane(p) {
@@ -232,7 +273,7 @@ function fixedUpdate() {
       const angleFromUp = deltaAngle(reference, me.angle);
       const factor = Math.pow(inverseLerp(0, Math.PI / 2, Math.abs(angleFromUp)), DOWN_TORQUE_EXPONENT);
       const torqueDir = angleFromUp > 0 ? 1 : -1;
-      me.angVel += torqueDir * PITCH_DOWN_TORQUE_MAX * factor * FDT;
+      me.angVel += torqueDir * vertSign * PITCH_DOWN_TORQUE_MAX * factor * FDT;
     }
 
     // Gravity
@@ -265,7 +306,7 @@ function fixedUpdate() {
 
   // Predict bullets
   for (const b of bullets) {
-    b.x += b.vx; b.y += b.vy;
+    b.x += b.vx * FDT; b.y += b.vy * FDT;
   }
 
   // Decay smoothing offsets
