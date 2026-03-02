@@ -26,13 +26,13 @@ cvs.width = W; cvs.height = H;
 const GRAVITY        = 600;    // px/s²
 const THRUST         = 450;    // px/s² forward along plane direction
 const LIFT           = 1600;   // px/s² in plane's up direction (strong liftoff)
-const PITCH_UP_RATE  = 2.8;    // rad/s constant nose-up rotation while throttling
-const NOSE_FALL_RATE = 1.5;    // rad/s max nose-fall rate without throttle
+const PITCH_UP_RATE  = 2.0;    // rad/s constant nose-up rotation while throttling
+const NOSE_FALL_RATE = 0.8;    // rad/s max nose-fall rate without throttle (gentle glide)
 const MAX_SPEED      = 500;    // px/s
-const DRAG           = 0.5;    // linear drag coefficient
+const DRAG           = 0.15;   // linear drag coefficient (low = long glide)
 const BULLET_SPEED   = 600;    // px/s
 const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
-const MIN_FLY_SPEED  = 150;    // px/s forward speed needed before pitch-up and lift kick in
+const MIN_FLY_SPEED  = 250;    // px/s forward speed needed before pitch-up and lift kick in
 const GROUND_Y = H - 40;
 const CEILING = 20;
 
