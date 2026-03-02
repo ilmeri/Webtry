@@ -24,14 +24,15 @@ cvs.width = W; cvs.height = H;
 
 // ===== Physics (simple arcade flight model — mirrors server) =====
 const GRAVITY        = 600;    // px/s²
-const THRUST         = 300;    // px/s² forward along plane direction
-const LIFT           = 700;    // px/s² in plane's up direction
+const THRUST         = 450;    // px/s² forward along plane direction
+const LIFT           = 1600;   // px/s² in plane's up direction (strong liftoff)
 const PITCH_UP_RATE  = 2.8;    // rad/s constant nose-up rotation while throttling
 const NOSE_FALL_RATE = 1.5;    // rad/s max nose-fall rate without throttle
 const MAX_SPEED      = 500;    // px/s
 const DRAG           = 0.5;    // linear drag coefficient
 const BULLET_SPEED   = 600;    // px/s
 const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
+const MIN_FLY_SPEED  = 150;    // px/s forward speed needed before pitch-up and lift kick in
 const GROUND_Y = H - 40;
 const CEILING = 20;
 
@@ -236,11 +237,15 @@ function fixedUpdate() {
   if (me && me.alive && me.occupied) {
     const vertSign = me.flipped ? -1 : 1;
     const onGround = me.y >= GROUND_Y;
+    const fwdX = Math.cos(me.angle);
+    const fwdY = Math.sin(me.angle);
+    const forwardSpeed = me.vx * fwdX + me.vy * fwdY;
+    const flyFactor = Math.min(forwardSpeed / MIN_FLY_SPEED, 1);
 
     // --- Angle (direct control, no angular velocity) ---
-    if (me.throttle) {
+    if (me.throttle && flyFactor >= 1) {
       me.angle -= PITCH_UP_RATE * vertSign * FDT;
-    } else if (!onGround) {
+    } else if (!onGround && !me.throttle) {
       const target = Math.PI / 2;
       const diff = deltaAngle(me.angle, target);
       const step = NOSE_FALL_RATE * FDT;
@@ -255,13 +260,17 @@ function fixedUpdate() {
 
     // --- Forces ---
     if (me.throttle) {
-      me.vx += Math.cos(me.angle) * THRUST * FDT;
-      me.vy += Math.sin(me.angle) * THRUST * FDT;
-      const upX = Math.sin(me.angle) * vertSign;
-      const upY = -Math.cos(me.angle) * vertSign;
-      const liftScale = Math.max(0, -upY);
-      me.vx += upX * LIFT * liftScale * FDT;
-      me.vy += upY * LIFT * liftScale * FDT;
+      me.vx += fwdX * THRUST * FDT;
+      me.vy += fwdY * THRUST * FDT;
+
+      // Lift only when airborne
+      if (!onGround && flyFactor > 0) {
+        const upX = Math.sin(me.angle) * vertSign;
+        const upY = -Math.cos(me.angle) * vertSign;
+        const liftScale = Math.max(0, -upY);
+        me.vx += upX * LIFT * liftScale * flyFactor * FDT;
+        me.vy += upY * LIFT * liftScale * flyFactor * FDT;
+      }
     }
 
     if (!onGround) {

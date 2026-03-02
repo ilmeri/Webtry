@@ -8,14 +8,15 @@ const MAX_PLAYERS = 8;
 
 // ===== Plane Physics (simple arcade flight model) =====
 const GRAVITY        = 600;    // px/s²
-const THRUST         = 300;    // px/s² forward along plane direction
-const LIFT           = 700;    // px/s² in plane's up direction (overcomes gravity)
+const THRUST         = 450;    // px/s² forward along plane direction
+const LIFT           = 1600;   // px/s² in plane's up direction (strong liftoff)
 const PITCH_UP_RATE  = 2.8;    // rad/s constant nose-up rotation while throttling
 const NOSE_FALL_RATE = 1.5;    // rad/s max nose-fall rate without throttle
 const MAX_SPEED      = 500;    // px/s
 const DRAG           = 0.5;    // linear drag coefficient
 const BULLET_SPEED   = 600;    // px/s
 const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
+const MIN_FLY_SPEED  = 150;    // px/s forward speed needed before pitch-up and lift kick in
 
 // ===== World =====
 const W = 1920, H = 1080;
@@ -57,14 +58,18 @@ class Player {
 
     const vertSign = this.flipped ? -1 : 1;
     const onGround = this.y >= GROUND_Y;
+    const fwdX = Math.cos(this.angle);
+    const fwdY = Math.sin(this.angle);
+    const forwardSpeed = this.vx * fwdX + this.vy * fwdY;
+    const flyFactor = Math.min(forwardSpeed / MIN_FLY_SPEED, 1); // 0..1 ramp
 
     // --- Angle (direct control, no angular velocity) ---
-    if (this.throttle) {
-      // Pitch up: decrease angle (nose up in y-down canvas)
+    if (this.throttle && flyFactor >= 1) {
+      // Only pitch up once we have enough forward speed
       this.angle -= PITCH_UP_RATE * vertSign * dt;
-    } else if (!onGround) {
+    } else if (!onGround && !this.throttle) {
       // Nose falls toward pointing down (PI/2 in y-down canvas)
-      const target = Math.PI / 2; // straight down
+      const target = Math.PI / 2;
       const diff = deltaAngle(this.angle, target);
       const step = NOSE_FALL_RATE * dt;
       if (Math.abs(diff) <= step) {
@@ -79,16 +84,18 @@ class Player {
 
     // --- Forces ---
     if (this.throttle) {
-      // Thrust along plane forward
-      this.vx += Math.cos(this.angle) * THRUST * dt;
-      this.vy += Math.sin(this.angle) * THRUST * dt;
+      // Thrust along plane forward (always active)
+      this.vx += fwdX * THRUST * dt;
+      this.vy += fwdY * THRUST * dt;
 
-      // Lift in plane's up direction (only when upright)
-      const upX = Math.sin(this.angle) * vertSign;
-      const upY = -Math.cos(this.angle) * vertSign;
-      const liftScale = Math.max(0, -upY); // 1 when level, 0 when inverted
-      this.vx += upX * LIFT * liftScale * dt;
-      this.vy += upY * LIFT * liftScale * dt;
+      // Lift only when airborne — on ground the normal force handles gravity
+      if (!onGround && flyFactor > 0) {
+        const upX = Math.sin(this.angle) * vertSign;
+        const upY = -Math.cos(this.angle) * vertSign;
+        const liftScale = Math.max(0, -upY);
+        this.vx += upX * LIFT * liftScale * flyFactor * dt;
+        this.vy += upY * LIFT * liftScale * flyFactor * dt;
+      }
     }
 
     // Gravity (only when airborne)
