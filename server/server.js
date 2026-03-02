@@ -7,13 +7,13 @@ const SYNC_INTERVAL = 3; // broadcast every 3 ticks = 20Hz
 const MAX_PLAYERS = 8;
 
 // ===== Plane Physics (simple arcade flight model) =====
-const GRAVITY        = 600;    // px/s²
-const THRUST         = 450;    // px/s² forward along plane direction
+const GRAVITY        = 400;    // px/s²
+const THRUST         = 900;    // px/s² forward along plane direction
 const LIFT           = 1600;   // px/s² in plane's up direction (strong liftoff)
 const PITCH_UP_RATE  = 2.0;    // rad/s constant nose-up rotation while throttling
-const NOSE_FALL_RATE = 0.8;    // rad/s max nose-fall rate without throttle (gentle glide)
-const MAX_SPEED      = 500;    // px/s
-const DRAG           = 0.15;   // linear drag coefficient (low = long glide)
+const NOSE_FALL_RATE = 0.4;    // rad/s nose-fall rate without throttle (slow glide)
+const MAX_SPEED      = 800;    // px/s
+const DRAG           = 0.05;   // linear drag coefficient (very low = long glide)
 const BULLET_SPEED   = 600;    // px/s
 const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
 const MIN_FLY_SPEED  = 250;    // px/s forward speed needed before pitch-up and lift kick in
