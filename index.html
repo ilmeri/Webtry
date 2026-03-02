@@ -284,7 +284,7 @@ function fixedUpdate() {
       me.y = GROUND_Y;
       if (me.vy > CRASH_SPEED) {
         me.alive = false;
-      } else {
+      } else if (me.vy > 0) {
         me.vy = 0;
         me.vx *= 0.95;
       }

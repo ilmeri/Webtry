@@ -117,7 +117,8 @@ class Player {
       this.y = GROUND_Y;
       if (this.vy > CRASH_SPEED) {
         this.alive = false; // crash
-      } else {
+      } else if (this.vy > 0) {
+        // Only clamp/friction when moving downward; let lift push plane off ground
         this.vy = 0;
         this.vx *= 0.95; // ground friction
       }
