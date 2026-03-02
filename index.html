@@ -23,18 +23,19 @@ const W = 1920, H = 1080;
 cvs.width = W; cvs.height = H;
 
 // ===== Physics (mirror server — ported from Unity PlanePhysics.cs) =====
-const GRAVITY = 9.81;
-const FLY_POWER = 12;
-const FORWARD_ACCEL = 1.5;
+const PX_SCALE = 50; // pixels per Unity unit
+const GRAVITY = 9.81 * PX_SCALE;
+const FLY_POWER = 12 * PX_SCALE;
+const FORWARD_ACCEL = 1.5 * PX_SCALE;
 const PITCH_UP_TORQUE = 2.5;
 const PITCH_DOWN_TORQUE_MAX = 2;
 const DOWN_TORQUE_EXPONENT = 2;
-const MIN_PITCH_SPEED = 3;
+const MIN_PITCH_SPEED = 3 * PX_SCALE;
 const MAX_ANGULAR_SPEED = 2.094;  // ~120 deg/s in rad/s
-const MAX_SPEED = 12;
+const MAX_SPEED = 12 * PX_SCALE;
 const LINEAR_DRAG = 0.35;
 const ANGULAR_DRAG = 2;
-const AERO_LIFT_COEFF = 0.15;
+const AERO_LIFT_COEFF = 0.15 / PX_SCALE;
 
 function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 function deltaAngle(a, b) {
@@ -386,7 +387,7 @@ cvs.addEventListener('mousedown', e => {
     // Local prediction bullet
     const me = players.find(p => p.idx === myIdx);
     if (me && me.alive) {
-      bullets.push({ x: me.x, y: me.y, vx: Math.cos(me.angle) * 12, vy: Math.sin(me.angle) * 12, owner: myIdx });
+      bullets.push({ x: me.x, y: me.y, vx: Math.cos(me.angle) * 12 * PX_SCALE, vy: Math.sin(me.angle) * 12 * PX_SCALE, owner: myIdx });
     }
   }
 });

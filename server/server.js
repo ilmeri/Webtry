@@ -7,18 +7,20 @@ const SYNC_INTERVAL = 3; // broadcast every 3 ticks = 20Hz
 const MAX_PLAYERS = 8;
 
 // ===== Plane Physics (ported from Unity PlanePhysics.cs) =====
-const GRAVITY = 9.81;
-const FLY_POWER = 12;
-const FORWARD_ACCEL = 1.5;
-const PITCH_UP_TORQUE = 2.5;       // rad/s² when throttle on
+// Unity uses meters; canvas uses pixels. Scale linear values by PX_SCALE.
+const PX_SCALE = 50;
+const GRAVITY = 9.81 * PX_SCALE;
+const FLY_POWER = 12 * PX_SCALE;
+const FORWARD_ACCEL = 1.5 * PX_SCALE;
+const PITCH_UP_TORQUE = 2.5;       // rad/s² when throttle on (angular, no scale)
 const PITCH_DOWN_TORQUE_MAX = 2;    // rad/s² max nose-down torque
 const DOWN_TORQUE_EXPONENT = 2;
-const MIN_PITCH_SPEED = 3;
+const MIN_PITCH_SPEED = 3 * PX_SCALE;
 const MAX_ANGULAR_SPEED = 2.094;    // ~120 deg/s in rad/s
-const MAX_SPEED = 12;
+const MAX_SPEED = 12 * PX_SCALE;
 const LINEAR_DRAG = 0.35;
 const ANGULAR_DRAG = 2;
-const AERO_LIFT_COEFF = 0.15;
+const AERO_LIFT_COEFF = 0.15 / PX_SCALE; // v² term, divide by scale
 
 // ===== World =====
 const W = 1920, H = 1080;
@@ -42,7 +44,7 @@ class Player {
     this.idx = idx;
     this.x = 200 + Math.random() * 200;
     this.y = H / 2 + (Math.random() - 0.5) * 200;
-    this.vx = 2; this.vy = 0;
+    this.vx = 2 * PX_SCALE; this.vy = 0;
     this.angle = 0;     // radians, 0 = right
     this.angVel = 0;    // angular velocity in rad/s
     this.flipped = false;
@@ -53,7 +55,7 @@ class Player {
   reset() {
     this.x = 200 + Math.random() * 200;
     this.y = H / 2 + (Math.random() - 0.5) * 200;
-    this.vx = 2; this.vy = 0;
+    this.vx = 2 * PX_SCALE; this.vy = 0;
     this.angle = 0;
     this.angVel = 0;
     this.flipped = false;
@@ -165,8 +167,8 @@ class Player {
 class Bullet {
   constructor(x, y, angle, ownerIdx) {
     this.x = x; this.y = y;
-    this.vx = Math.cos(angle) * 12;
-    this.vy = Math.sin(angle) * 12;
+    this.vx = Math.cos(angle) * 12 * PX_SCALE;
+    this.vy = Math.sin(angle) * 12 * PX_SCALE;
     this.owner = ownerIdx;
     this.life = 120; // frames
   }
