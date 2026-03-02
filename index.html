@@ -22,18 +22,37 @@ const cvs = document.getElementById('c'), ctx = cvs.getContext('2d');
 const W = 1920, H = 1080;
 cvs.width = W; cvs.height = H;
 
-// ===== Physics (mirror server) =====
-let THROTTLE_ACCEL = 0.15;
-let THROTTLE_ROT = 2.5;
-let GRAVITY = 0.12;
-let MAX_SPEED = 8;
-let DRAG = 0.995;
+// ===== Physics (mirror server — ported from Unity PlanePhysics.cs) =====
+const GRAVITY = 9.81;
+const FLY_POWER = 12;
+const FORWARD_ACCEL = 1.5;
+const PITCH_UP_TORQUE = 2.5;
+const PITCH_DOWN_TORQUE_MAX = 2;
+const DOWN_TORQUE_EXPONENT = 2;
+const MIN_PITCH_SPEED = 3;
+const MAX_ANGULAR_SPEED = 2.094;  // ~120 deg/s in rad/s
+const MAX_SPEED = 12;
+const LINEAR_DRAG = 0.35;
+const ANGULAR_DRAG = 2;
+const AERO_LIFT_COEFF = 0.15;
+
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+function deltaAngle(a, b) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+function inverseLerp(a, b, v) {
+  if (Math.abs(b - a) < 1e-9) return 0;
+  return clamp01((v - a) / (b - a));
+}
 
 // ===== Game State =====
 let gameState = 'MENU'; // MENU, PLAYING
 let myIdx = -1;
 let ws = null;
-let players = []; // { idx, x, y, vx, vy, angle, throttle, alive, occupied }
+let players = []; // { idx, x, y, vx, vy, angle, angVel, flipped, throttle, alive, occupied }
 let bullets = []; // { x, y, vx, vy, owner }
 let myName = localStorage.getItem('webtry-name') || '';
 let myThrottle = false;
@@ -86,6 +105,8 @@ function drawPlane(p) {
   ctx.save();
   ctx.translate(sx, sy);
   ctx.rotate(p.angle);
+  // When flipped, mirror vertically (along the forward axis)
+  if (p.flipped) ctx.scale(1, -1);
 
   // Fuselage
   ctx.fillStyle = p.alive ? (p.idx === myIdx ? '#e8c840' : '#e04545') : '#666';
@@ -178,24 +199,65 @@ function fixedUpdate() {
 
   const me = players.find(p => p.idx === myIdx);
   if (me && me.alive && me.occupied) {
-    // Mirror server physics
+    // Mirror server physics exactly (ported from Unity PlanePhysics.cs)
+    const vertSign = me.flipped ? -1 : 1;
+    const fwdX = Math.cos(me.angle);
+    const fwdY = Math.sin(me.angle);
+    const upX = Math.sin(me.angle) * vertSign;
+    const upY = -Math.cos(me.angle) * vertSign;
+    const forwardSpeed = me.vx * fwdX + me.vy * fwdY;
+    const worldUpX = 0, worldUpY = -1;
+
     if (me.throttle) {
-      me.angle -= THROTTLE_ROT * FDT;
-      me.vx += Math.cos(me.angle) * THROTTLE_ACCEL;
-      me.vy += Math.sin(me.angle) * THROTTLE_ACCEL;
+      const directionalLift = clamp01(upX * worldUpX + upY * worldUpY);
+      me.vx += upX * FLY_POWER * directionalLift * FDT;
+      me.vy += upY * FLY_POWER * directionalLift * FDT;
+      me.vx += fwdX * FORWARD_ACCEL * FDT;
+      me.vy += fwdY * FORWARD_ACCEL * FDT;
+      if (forwardSpeed >= MIN_PITCH_SPEED && Math.abs(me.angVel) < MAX_ANGULAR_SPEED) {
+        me.angVel += -PITCH_UP_TORQUE * vertSign * FDT;
+      }
     }
-    me.vy += GRAVITY;
+
+    // Aerodynamic lift (always)
+    const aeroLiftDot = clamp01(upX * worldUpX + upY * worldUpY);
+    const aeroForce = AERO_LIFT_COEFF * forwardSpeed * forwardSpeed * aeroLiftDot;
+    me.vx += upX * aeroForce * FDT;
+    me.vy += upY * aeroForce * FDT;
+
+    // Pitch-down torque when throttle OFF
     if (!me.throttle) {
-      const velAngle = Math.atan2(me.vy, me.vx);
-      let diff = velAngle - me.angle;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      me.angle += diff * 0.08;
+      const reference = me.flipped ? Math.PI / 2 : -Math.PI / 2;
+      const angleFromUp = deltaAngle(reference, me.angle);
+      const factor = Math.pow(inverseLerp(0, Math.PI / 2, Math.abs(angleFromUp)), DOWN_TORQUE_EXPONENT);
+      const torqueDir = angleFromUp > 0 ? 1 : -1;
+      me.angVel += torqueDir * PITCH_DOWN_TORQUE_MAX * factor * FDT;
     }
-    me.vx *= DRAG; me.vy *= DRAG;
+
+    // Gravity
+    me.vy += GRAVITY * FDT;
+
+    // Angular drag + clamp
+    me.angVel *= 1 / (1 + ANGULAR_DRAG * FDT);
+    if (me.angVel > MAX_ANGULAR_SPEED) me.angVel = MAX_ANGULAR_SPEED;
+    if (me.angVel < -MAX_ANGULAR_SPEED) me.angVel = -MAX_ANGULAR_SPEED;
+
+    // Apply angular velocity
+    me.angle += me.angVel * FDT;
+    while (me.angle > Math.PI) me.angle -= Math.PI * 2;
+    while (me.angle < -Math.PI) me.angle += Math.PI * 2;
+
+    // Linear drag + speed cap
+    me.vx *= 1 / (1 + LINEAR_DRAG * FDT);
+    me.vy *= 1 / (1 + LINEAR_DRAG * FDT);
     const spd = Math.sqrt(me.vx * me.vx + me.vy * me.vy);
     if (spd > MAX_SPEED) { me.vx *= MAX_SPEED / spd; me.vy *= MAX_SPEED / spd; }
-    me.x += me.vx; me.y += me.vy;
+
+    // Move
+    me.x += me.vx * FDT;
+    me.y += me.vy * FDT;
+
+    // Ground / ceiling
     if (me.y > H - 40) { me.y = H - 40; me.alive = false; }
     if (me.y < 20) { me.y = 20; if (me.vy < 0) me.vy = 0; }
   }
@@ -221,7 +283,8 @@ function unpackState(data) {
     let p = players.find(pp => pp.idx === sp.i);
     if (!p) {
       p = { idx: sp.i, x: sp.x, y: sp.y, vx: sp.vx, vy: sp.vy,
-            angle: sp.a, throttle: sp.t, alive: sp.alive, occupied: sp.occ, name: '' };
+            angle: sp.a, angVel: sp.av || 0, flipped: !!sp.fl,
+            throttle: sp.t, alive: sp.alive, occupied: sp.occ, name: '' };
       players.push(p);
     }
 
@@ -231,12 +294,15 @@ function unpackState(data) {
       smoothOffsets[sp.i].x += p.x - sp.x;
       smoothOffsets[sp.i].y += p.y - sp.y;
       p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
+      p.angle = sp.a; p.angVel = sp.av || 0;
+      p.flipped = !!sp.fl;
       // Client authoritative for throttle; accept alive from server
       p.alive = sp.alive;
     } else {
       // Remote: snap
       p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
-      p.angle = sp.a; p.throttle = sp.t; p.alive = sp.alive; p.occupied = sp.occ;
+      p.angle = sp.a; p.angVel = sp.av || 0; p.flipped = !!sp.fl;
+      p.throttle = sp.t; p.alive = sp.alive; p.occupied = sp.occ;
     }
   }
 
@@ -307,13 +373,11 @@ cvs.addEventListener('mousedown', e => {
     if (me) me.throttle = true;
     if (ws) ws.send(JSON.stringify({ type: 'input', action: 'throttle', active: true }));
   } else if (e.button === 1) {
-    // Middle click: flip
+    // Middle click: flip (toggle flipped flag, not angle rotation)
     e.preventDefault();
     const me = players.find(p => p.idx === myIdx);
     if (me && me.alive) {
-      me.angle += Math.PI;
-      while (me.angle > Math.PI) me.angle -= Math.PI * 2;
-      while (me.angle < -Math.PI) me.angle += Math.PI * 2;
+      me.flipped = !me.flipped;
     }
     if (ws) ws.send(JSON.stringify({ type: 'input', action: 'flip' }));
   } else if (e.button === 2) {
