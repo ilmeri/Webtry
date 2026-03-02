@@ -11,7 +11,8 @@ const GRAVITY        = 400;    // px/s²
 const THRUST         = 900;    // px/s² forward along plane direction
 const LIFT           = 1600;   // px/s² in plane's up direction (strong liftoff)
 const PITCH_UP_RATE  = 2.0;    // rad/s constant nose-up rotation while throttling
-const NOSE_FALL_RATE = 0.4;    // rad/s nose-fall rate without throttle (slow glide)
+const NOSE_FALL_RATE = 1.5;    // rad/s nose-fall rate without throttle (snappy response)
+const GLIDE_ANGLE    = 0.3;    // rad (~17°) max nose-down angle at full airspeed
 const MAX_SPEED      = 800;    // px/s
 const DRAG           = 0.05;   // linear drag coefficient (very low = long glide)
 const BULLET_SPEED   = 600;    // px/s
@@ -68,8 +69,11 @@ class Player {
       // Only pitch up once we have enough forward speed
       this.angle -= PITCH_UP_RATE * vertSign * dt;
     } else if (!onGround && !this.throttle) {
-      // Nose falls toward pointing down (PI/2 in y-down canvas)
-      const target = Math.PI / 2;
+      // Nose falls toward a speed-dependent glide angle
+      // Fast = shallow glide (GLIDE_ANGLE), slow = nose drops to straight down (PI/2)
+      const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+      const speedFactor = Math.min(speed / (MAX_SPEED * 0.5), 1);
+      const target = GLIDE_ANGLE + (Math.PI / 2 - GLIDE_ANGLE) * (1 - speedFactor);
       const diff = deltaAngle(this.angle, target);
       const step = NOSE_FALL_RATE * dt;
       if (Math.abs(diff) <= step) {
