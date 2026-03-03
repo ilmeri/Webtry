@@ -7,17 +7,17 @@ const SYNC_INTERVAL = 3; // broadcast every 3 ticks = 20Hz
 const MAX_PLAYERS = 8;
 
 // ===== Plane Physics (simple arcade flight model) =====
-const GRAVITY        = 400;    // px/s²
-const THRUST         = 900;    // px/s² forward along plane direction
-const LIFT           = 1600;   // px/s² in plane's up direction (strong liftoff)
-const PITCH_UP_RATE  = 2.0;    // rad/s constant nose-up rotation while throttling
+const GRAVITY        = 250;    // px/s² (lower = more consistent loops)
+const THRUST         = 500;    // px/s² forward along plane direction
+const LIFT           = 700;    // px/s² in plane's up direction (gentler climb)
+const PITCH_UP_RATE  = 2.5;    // rad/s — loop radius ≈ speed/rate ≈ 160px ≈ 5× plane length
 const NOSE_FALL_RATE = 1.5;    // rad/s nose-fall rate without throttle (snappy response)
 const GLIDE_ANGLE    = 0.3;    // rad (~17°) max nose-down angle at full airspeed
-const MAX_SPEED      = 800;    // px/s
-const DRAG           = 0.05;   // linear drag coefficient (very low = long glide)
+const MAX_SPEED      = 400;    // px/s (slower, more controllable)
+const DRAG           = 0.15;   // linear drag coefficient (higher = quicker decel, more control)
 const BULLET_SPEED   = 600;    // px/s
-const CRASH_SPEED    = 200;    // px/s downward vy to crash on ground contact
-const MIN_FLY_SPEED  = 250;    // px/s forward speed needed before pitch-up and lift kick in
+const CRASH_SPEED    = 130;    // px/s downward vy to crash on ground contact
+const MIN_FLY_SPEED  = 150;    // px/s forward speed needed before pitch-up and lift kick in
 
 // ===== World =====
 const W = 1920, H = 1080;
